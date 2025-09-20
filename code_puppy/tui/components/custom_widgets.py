@@ -25,7 +25,7 @@ class CustomTextArea(TextArea):
         if event.key == "alt+enter":
             # Don't prevent default - let the binding system handle it
             return
-        
+
         # Handle escape+enter manually
         if event.key == "escape+enter":
             self.action_insert_newline()
@@ -38,8 +38,11 @@ class CustomTextArea(TextArea):
         # Handle Enter key specifically
         if event.key == "enter":
             # Check if this key is part of an escape sequence (Alt+Enter)
-            if hasattr(event, "is_cursor_sequence") or (
-                hasattr(event, "meta") and event.meta
+            # On Mac, Option+Enter produces "escape+enter"
+            if (
+                hasattr(event, "is_cursor_sequence")
+                or (hasattr(event, "meta") and event.meta)
+                or event.key == "escape+enter"
             ):
                 # If it's part of an escape sequence, let the parent handle it
                 # so that bindings can process it
