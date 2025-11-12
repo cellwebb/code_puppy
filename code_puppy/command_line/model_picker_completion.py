@@ -77,11 +77,30 @@ class ModelNameCompleter(Completer):
         start_position = -(len(text_after_trigger))
 
         # Filter model names based on what's typed after /model
+        current_agent_model = None
+        try:
+            from code_puppy.agents import get_current_agent
+            from code_puppy.config import get_agent_pinned_model
+
+            current_agent = get_current_agent()
+            current_agent_model = get_agent_pinned_model(current_agent.name)
+        except Exception:
+            pass  # Fail gracefully if agent info not available
+
         for model_name in self.model_names:
             if text_after_trigger and not model_name.startswith(text_after_trigger):
                 continue  # Skip models that don't match the typed text
 
-            meta = "Model (selected)" if model_name == get_active_model() else "Model"
+            # Determine the meta text based on model status
+            if model_name == get_active_model():
+                if current_agent_model == model_name:
+                    meta = "Model (selected + pinned)"
+                else:
+                    meta = "Model (selected)"
+            elif current_agent_model == model_name:
+                meta = "Model (pinned to agent)"
+            else:
+                meta = "Model"
             yield Completion(
                 model_name,
                 start_position=start_position,
@@ -100,6 +119,11 @@ def update_model_in_input(text: str) -> Optional[str]:
         model_names = load_model_names()
         for model in model_names:
             if rest == model:
+                # Check for pinned model on current agent
+                if not _handle_pinned_model_change(model):
+                    # User cancelled the change
+                    return None
+
                 set_active_model(model)
                 # Remove /model from the input
                 idx = text.find("/model " + model)
@@ -115,6 +139,11 @@ def update_model_in_input(text: str) -> Optional[str]:
         model_names = load_model_names()
         for model in model_names:
             if rest == model:
+                # Check for pinned model on current agent
+                if not _handle_pinned_model_change(model):
+                    # User cancelled the change
+                    return None
+
                 set_active_model(model)
                 # Remove /m from the input
                 idx = text.find("/m " + model)
@@ -123,6 +152,83 @@ def update_model_in_input(text: str) -> Optional[str]:
                     return new_text
 
     return None
+
+
+def _handle_pinned_model_change(requested_model: str) -> bool:
+    """Handle pinned model logic when switching models.
+
+    Args:
+        requested_model: The model the user wants to switch to
+
+    Returns:
+        bool: True to proceed with model change, False to cancel
+    """
+    try:
+        from rich.console import Console
+
+        from code_puppy.agents import get_current_agent
+        from code_puppy.config import get_agent_pinned_model, set_agent_pinned_model
+
+        current_agent = get_current_agent()
+        current_agent_name = current_agent.name
+        pinned_model = get_agent_pinned_model(current_agent_name)
+
+        # If no pinned model or pinned model equals requested model, proceed normally
+        if not pinned_model or pinned_model == requested_model:
+            return True
+
+        console = Console()
+        console.print("\n[bold yellow]⚠️  Model Pinned Conflicting Change[/bold yellow]")
+        console.print(
+            f"Current agent '[cyan]{current_agent_name}[/cyan]' has model '[green]{pinned_model}[/green]' pinned."
+        )
+        console.print(f"You're trying to switch to '[cyan]{requested_model}[/cyan]'.\n")
+
+        from rich.prompt import IntPrompt
+
+        # Show the options with numbers for arrow key selection
+        console.print("[bold]What would you like to do?[/bold]")
+        console.print("[green]1.[/green] Change model but leave pin alone")
+        console.print("[green]2.[/green] Change model and also update the pin")
+        console.print("[green]3.[/green] Change model and unpin")
+        console.print("[green]4.[/green] Cancel the change\n")
+
+        choice = IntPrompt.ask(
+            "Select an option", choices=[1, 2, 3, 4], default=1, show_choices=False
+        )
+
+        if choice == 1:
+            # Change model but leave pin alone
+            console.print(
+                f"✅ Switching to '{requested_model}' (pin for '{current_agent_name}' remains '{pinned_model}')"
+            )
+            return True
+        elif choice == 2:
+            # Change model and also change the pin
+            set_agent_pinned_model(current_agent_name, requested_model)
+            console.print(
+                f"✅ Switching to '{requested_model}' and updating pin for '{current_agent_name}'"
+            )
+            return True
+        elif choice == 3:
+            # Change model and unpin
+            from code_puppy.config import clear_agent_pinned_model
+
+            clear_agent_pinned_model(current_agent_name)
+            console.print(
+                f"✅ Switching to '{requested_model}' and unpinning from '{current_agent_name}'"
+            )
+            return True
+        elif choice == 4:
+            # Cancel the change
+            console.print(f"❌ Cancelled model change to '{requested_model}'")
+            return False
+
+    except Exception:
+        # If anything fails, let the change proceed (fail safe)
+        return True
+
+    return True
 
 
 async def get_input_with_model_completion(
