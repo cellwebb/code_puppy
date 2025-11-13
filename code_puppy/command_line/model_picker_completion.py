@@ -120,11 +120,22 @@ def update_model_in_input(text: str) -> Optional[str]:
         for model in model_names:
             if rest == model:
                 # Check for pinned model on current agent
-                if not _handle_pinned_model_change(model):
+                set_global_model = _handle_pinned_model_change(model)
+                if set_global_model is None:
                     # User cancelled the change
                     return None
-
-                set_active_model(model)
+                elif set_global_model:
+                    # Options 2 (update pin) - set global model
+                    set_active_model(model)
+                else:
+                    # Option 1 or 3 (temporary override) - reload agent to pick up temp override
+                    try:
+                        from code_puppy.agents import get_current_agent
+                        current_agent = get_current_agent()
+                        current_agent.reload_code_generation_agent()
+                    except Exception:
+                        # Fallback - try setting global model if reload fails
+                        set_active_model(model)
                 # Remove /model from the input
                 idx = text.find("/model " + model)
                 if idx != -1:
@@ -140,11 +151,22 @@ def update_model_in_input(text: str) -> Optional[str]:
         for model in model_names:
             if rest == model:
                 # Check for pinned model on current agent
-                if not _handle_pinned_model_change(model):
+                set_global_model = _handle_pinned_model_change(model)
+                if set_global_model is None:
                     # User cancelled the change
                     return None
-
-                set_active_model(model)
+                elif set_global_model:
+                    # Options 2 (update pin) - set global model
+                    set_active_model(model)
+                else:
+                    # Option 1 or 3 (temporary override) - reload agent to pick up temp override
+                    try:
+                        from code_puppy.agents import get_current_agent
+                        current_agent = get_current_agent()
+                        current_agent.reload_code_generation_agent()
+                    except Exception:
+                        # Fallback - try setting global model if reload fails
+                        set_active_model(model)
                 # Remove /m from the input
                 idx = text.find("/m " + model)
                 if idx != -1:
@@ -154,14 +176,17 @@ def update_model_in_input(text: str) -> Optional[str]:
     return None
 
 
-def _handle_pinned_model_change(requested_model: str) -> bool:
+def _handle_pinned_model_change(requested_model: str) -> Optional[bool]:
     """Handle pinned model logic when switching models.
 
     Args:
         requested_model: The model the user wants to switch to
 
     Returns:
-        bool: True to proceed with model change, False to cancel
+        Optional[bool]: 
+        - None: User cancelled the change
+        - True: Should set global model (options 2, 3)
+        - False: Should use temporary override only (option 1)
     """
     try:
         from rich.console import Console
@@ -184,7 +209,6 @@ def _handle_pinned_model_change(requested_model: str) -> bool:
         )
         console.print(f"You're trying to switch to '[cyan]{requested_model}[/cyan]'.\n")
 
-        from rich.prompt import IntPrompt
 
         # Show the options with numbers for arrow key selection
         console.print("[bold]What would you like to do?[/bold]")
@@ -193,42 +217,59 @@ def _handle_pinned_model_change(requested_model: str) -> bool:
         console.print("[green]3.[/green] Change model and unpin")
         console.print("[green]4.[/green] Cancel the change\n")
 
-        choice = IntPrompt.ask(
-            "Select an option", choices=[1, 2, 3, 4], default=1, show_choices=False
-        )
+        # Use a simple input approach to ensure we wait for user response
+        console.print("[bold]Select an option (1-4):[/bold] [dim]1=Change model only, 2=Change model+pin, 3=Change model+unpin, 4=Cancel[/dim]")
+        
+        while True:
+            try:
+                user_input = input("\n> ").strip()
+                if not user_input:
+                    choice = 1  # Default to option 1
+                    break
+                elif user_input in ['1', '2', '3', '4']:
+                    choice = int(user_input)
+                    break
+                else:
+                    console.print("[yellow]Please enter 1, 2, 3, or 4 (or press Enter for 1)[/yellow]")
+            except (EOFError, KeyboardInterrupt):
+                console.print(f"❌ Cancelled model change to '{requested_model}'")
+                return False
 
         if choice == 1:
-            # Change model but leave pin alone
+            # Change model but leave pin alone - use temporary override
+            current_agent.set_temporary_model_override(requested_model)
             console.print(
                 f"✅ Switching to '{requested_model}' (pin for '{current_agent_name}' remains '{pinned_model}')"
             )
-            return True
+            return False  # Use temporary override, don't set global model
         elif choice == 2:
             # Change model and also change the pin
             set_agent_pinned_model(current_agent_name, requested_model)
+            # Clear any temporary override since we're updating the pin
+            current_agent.clear_temporary_model_override()
             console.print(
                 f"✅ Switching to '{requested_model}' and updating pin for '{current_agent_name}'"
             )
-            return True
+            return True  # Set global model
         elif choice == 3:
             # Change model and unpin
             from code_puppy.config import clear_agent_pinned_model
 
             clear_agent_pinned_model(current_agent_name)
+            # Set temporary override for the new model
+            current_agent.set_temporary_model_override(requested_model)
             console.print(
                 f"✅ Switching to '{requested_model}' and unpinning from '{current_agent_name}'"
             )
-            return True
+            return False  # Use temporary override, don't set global model
         elif choice == 4:
             # Cancel the change
             console.print(f"❌ Cancelled model change to '{requested_model}'")
-            return False
+            return None
 
     except Exception:
         # If anything fails, let the change proceed (fail safe)
         return True
-
-    return True
 
 
 async def get_input_with_model_completion(

@@ -85,6 +85,8 @@ class BaseAgent(ABC):
         # Puppy rules loaded lazily
         self._puppy_rules: Optional[str] = None
         self.cur_model: pydantic_ai.models.Model
+        # Temporary model override for session-specific changes
+        self._temporary_model_override: Optional[str] = None
 
     @property
     @abstractmethod
@@ -189,15 +191,42 @@ class BaseAgent(ABC):
         self._compacted_message_hashes.add(message_hash)
 
     def get_model_name(self) -> Optional[str]:
-        """Get pinned model name for this agent, if specified.
+        """Get model name for this agent, with support for temporary overrides.
 
         Returns:
-            Model name to use for this agent, or global default if none pinned.
+            Model name to use for this agent:
+            1. Temporary override if set (for "change but leave pin alone" case)
+            2. Pinned model if specified
+            3. Global default if no pinned or temporary override
         """
+        # First check for temporary override (takes highest priority)
+        if self._temporary_model_override:
+            return self._temporary_model_override
+
         pinned = get_agent_pinned_model(self.name)
         if pinned == "" or pinned is None:
             return get_global_model_name()
         return pinned
+
+    def set_temporary_model_override(self, model_name: str):
+        """Set a temporary model override for this session.
+
+        Args:
+            model_name: Model name to use temporarily, overriding pinned model
+        """
+        self._temporary_model_override = model_name
+
+    def clear_temporary_model_override(self):
+        """Clear any temporary model override."""
+        self._temporary_model_override = None
+
+    def has_temporary_model_override(self) -> bool:
+        """Check if this agent has a temporary model override.
+
+        Returns:
+            bool: True if a temporary override is active
+        """
+        return self._temporary_model_override is not None
 
     def _clean_binaries(self, messages: List[ModelMessage]) -> List[ModelMessage]:
         cleaned = []
